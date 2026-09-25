@@ -3,6 +3,7 @@ import json
 
 from wikipedia import resolve_article, fetch_pageviews
 from metrics import calculate_basic_metrics
+from charts import generate_interest_chart
 
 
 def analyze_topic(
@@ -96,6 +97,20 @@ def main():
         help="End date in YYYYMMDD format.",
     )
 
+    parser.add_argument(
+        "--chart",
+        help="Optional path for PNG chart output.",
+    )
+
+    parser.add_argument(
+        "--chart-mode",
+        choices=["absolute", "normalized"],
+        default="absolute",
+        help=(
+            "Chart mode: raw pageviews or normalized trend."
+        ),
+    )
+
     args = parser.parse_args()
 
     result = analyze_topic(
@@ -104,6 +119,18 @@ def main():
         start=args.start,
         end=args.end,
     )
+
+    if args.chart:
+        chart_path = generate_interest_chart(
+            analysis=result,
+            output_path=args.chart,
+            mode=args.chart_mode,
+        )
+
+        result["chart"] = {
+            "path": chart_path,
+            "mode": args.chart_mode,
+        }
 
     print(
         json.dumps(

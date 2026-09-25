@@ -1,10 +1,18 @@
 import httpx
-from metrics import calculate_basic_metrics
+
+from cache_utils import load_cache, save_cache
+
 
 USER_AGENT = "WikipediaInterestSkill/0.1 (contact: dz546838@gmail.com)"
 
 
 def search_english_article(topic: str) -> dict:
+    cache_key = f"search_english_article::{topic}"
+    cached = load_cache("article_search", cache_key)
+
+    if cached is not None:
+        return cached
+
     url = "https://en.wikipedia.org/w/api.php"
 
     params = {
@@ -36,18 +44,27 @@ def search_english_article(topic: str) -> dict:
             f"No English Wikipedia article found for topic '{topic}'"
         )
 
-    best_match = results[0]
-
-    return {
-        "pageid": best_match["pageid"],
-        "title": best_match["title"],
+    best_match = {
+        "pageid": results[0]["pageid"],
+        "title": results[0]["title"],
     }
+
+    save_cache("article_search", cache_key, best_match)
+    return best_match
 
 
 def get_interlanguage_title(
     english_title: str,
     target_language: str,
 ) -> str | None:
+    cache_key = (
+        f"get_interlanguage_title::{english_title}::{target_language}"
+    )
+    cached = load_cache("langlinks", cache_key)
+
+    if cached is not None:
+        return cached["title"]
+
     url = "https://en.wikipedia.org/w/api.php"
 
     params = {
@@ -78,25 +95,35 @@ def get_interlanguage_title(
     langlinks = page.get("langlinks", [])
 
     if not langlinks:
+        save_cache(
+            "langlinks",
+            cache_key,
+            {"title": None},
+        )
         return None
 
-    return langlinks[0]["*"]
+    title = langlinks[0]["*"]
+
+    save_cache(
+        "langlinks",
+        cache_key,
+        {"title": title},
+    )
+
+    return title
 
 
 def resolve_article(topic: str, language: str) -> dict:
-    """
-    Resolve a topic through the English Wikipedia article
-    and its interlanguage link.
+    cache_key = f"resolve_article::{topic}::{language}"
+    cached = load_cache("resolved_articles", cache_key)
 
-    If no target-language article exists, return an explicit
-    unresolved result instead of guessing from local search.
-    """
+    if cached is not None:
+        return cached
 
     english_article = search_english_article(topic)
 
-    # English requires no interlanguage lookup.
     if language == "en":
-        return {
+        result = {
             "topic": topic,
             "source_language": "en",
             "source_title": english_article["title"],
@@ -109,6 +136,8 @@ def resolve_article(topic: str, language: str) -> dict:
             "resolution_method": "english_search",
             "status": "resolved",
         }
+        save_cache("resolved_articles", cache_key, result)
+        return result
 
     target_title = get_interlanguage_title(
         english_title=english_article["title"],
@@ -116,7 +145,7 @@ def resolve_article(topic: str, language: str) -> dict:
     )
 
     if target_title is None:
-        return {
+        result = {
             "topic": topic,
             "source_language": "en",
             "source_title": english_article["title"],
@@ -130,13 +159,15 @@ def resolve_article(topic: str, language: str) -> dict:
                 f"'{english_article['title']}' in '{language}' Wikipedia."
             ),
         }
+        save_cache("resolved_articles", cache_key, result)
+        return result
 
     article_url = (
         f"https://{language}.wikipedia.org/wiki/"
         f"{target_title.replace(' ', '_')}"
     )
 
-    return {
+    result = {
         "topic": topic,
         "source_language": "en",
         "source_title": english_article["title"],
@@ -147,6 +178,10 @@ def resolve_article(topic: str, language: str) -> dict:
         "status": "resolved",
     }
 
+    save_cache("resolved_articles", cache_key, result)
+    return result
+
+
 def fetch_pageviews(
     article_title: str,
     language: str,
@@ -154,14 +189,14 @@ def fetch_pageviews(
     end: str,
     granularity: str = "monthly",
 ) -> list[dict]:
-    """
-    Fetch Wikipedia pageviews for an article.
+    cache_key = (
+        f"fetch_pageviews::{article_title}::{language}::"
+        f"{start}::{end}::{granularity}"
+    )
+    cached = load_cache("pageviews", cache_key)
 
-    Dates must be in YYYYMMDD format.
-    Example:
-        start="20240101"
-        end="20241231"
-    """
+    if cached is not None:
+        return cached
 
     encoded_title = article_title.replace(" ", "_")
 
@@ -180,39 +215,10 @@ def fetch_pageviews(
         headers=headers,
         timeout=30.0,
     )
-
     response.raise_for_status()
 
     data = response.json()
+    items = data.get("items", [])
 
-    return data.get("items", [])
-
-if __name__ == "__main__":
-    result = resolve_article(
-        topic="intermittent fasting",
-        language="cs",
-    )
-
-    print("Resolved article:")
-    print(result)
-
-    if result["status"] == "resolved":
-        views = fetch_pageviews(
-            article_title=result["title"],
-            language=result["language"],
-            start="20230101",
-            end="20241231",
-        )
-
-        print("\nPageviews:")
-        for item in views:
-            print(
-                item["timestamp"],
-                item["views"],
-            )
-
-        metrics = calculate_basic_metrics(views)
-
-        print("\nMetrics:")
-        for key, value in metrics.items():
-            print(f"{key}: {value}")
+    save_cache("pageviews", cache_key, items)
+    return items
