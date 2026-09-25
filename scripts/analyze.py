@@ -1,6 +1,5 @@
 import argparse
 import json
-from datetime import date
 
 from wikipedia import resolve_article, fetch_pageviews
 from metrics import calculate_basic_metrics
@@ -21,12 +20,15 @@ def analyze_topic(
         )
 
         if article["status"] != "resolved":
-            results.append({
-                "language": language,
-                "article": article,
-                "metrics": None,
-                "status": "unresolved",
-            })
+            results.append(
+                {
+                    "language": language,
+                    "article": article,
+                    "metrics": None,
+                    "series": [],
+                    "status": "unresolved",
+                }
+            )
             continue
 
         pageviews = fetch_pageviews(
@@ -38,12 +40,23 @@ def analyze_topic(
 
         metrics = calculate_basic_metrics(pageviews)
 
-        results.append({
-            "language": language,
-            "article": article,
-            "metrics": metrics,
-            "status": "ok",
-        })
+        series = [
+            {
+                "timestamp": item["timestamp"],
+                "views": item["views"],
+            }
+            for item in pageviews
+        ]
+
+        results.append(
+            {
+                "language": language,
+                "article": article,
+                "metrics": metrics,
+                "series": series,
+                "status": "ok",
+            }
+        )
 
     return {
         "topic": topic,
