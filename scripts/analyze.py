@@ -1,10 +1,12 @@
 import argparse
 import json
+from pathlib import Path
 
 from wikipedia import resolve_article, fetch_pageviews
 from metrics import calculate_basic_metrics
 from charts import generate_interest_chart
 from forecast import linear_forecast
+from summary import build_summary
 
 
 def analyze_topic(
@@ -32,6 +34,7 @@ def analyze_topic(
                     "metrics": None,
                     "series": [],
                     "forecast": None,
+                    "summary": None,
                     "status": article["status"],
                 }
             )
@@ -60,6 +63,13 @@ def analyze_topic(
             lookback_months=12,
         )
 
+        summary = build_summary(
+            language=language,
+            article=article,
+            metrics=metrics,
+            forecast=forecast,
+        )
+
         results.append(
             {
                 "language": language,
@@ -67,6 +77,7 @@ def analyze_topic(
                 "metrics": metrics,
                 "series": series,
                 "forecast": forecast,
+                "summary": summary,
                 "status": "ok",
             }
         )
@@ -82,12 +93,6 @@ def analyze_topic(
 def parse_article_overrides(
     values: list[str] | None,
 ) -> dict[str, str]:
-    """
-    Parse values like:
-        pl=Głodówka lecznicza
-        cs=Přerušovaný půst
-    """
-
     if not values:
         return {}
 
@@ -112,6 +117,32 @@ def parse_article_overrides(
         overrides[language] = title
 
     return overrides
+
+
+def save_json(
+    data: dict,
+    output_path: str,
+) -> str:
+    path = Path(output_path)
+
+    if path.parent != Path("."):
+        path.parent.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+    with path.open(
+        "w",
+        encoding="utf-8",
+    ) as file:
+        json.dump(
+            data,
+            file,
+            ensure_ascii=False,
+            indent=2,
+        )
+
+    return str(path)
 
 
 def main():
@@ -165,6 +196,11 @@ def main():
         help="Chart mode: raw pageviews or normalized trend.",
     )
 
+    parser.add_argument(
+        "--output",
+        help="Optional path for JSON analysis output.",
+    )
+
     args = parser.parse_args()
 
     article_overrides = parse_article_overrides(
@@ -190,6 +226,14 @@ def main():
             "path": chart_path,
             "mode": args.chart_mode,
         }
+
+    if args.output:
+        output_path = save_json(
+            data=result,
+            output_path=args.output,
+        )
+
+        result["output"] = output_path
 
     print(
         json.dumps(
