@@ -4,6 +4,7 @@ import json
 from wikipedia import resolve_article, fetch_pageviews
 from metrics import calculate_basic_metrics
 from charts import generate_interest_chart
+from forecast import linear_forecast
 
 
 def analyze_topic(
@@ -30,6 +31,7 @@ def analyze_topic(
                     "article": article,
                     "metrics": None,
                     "series": [],
+                    "forecast": None,
                     "status": article["status"],
                 }
             )
@@ -52,12 +54,19 @@ def analyze_topic(
             for item in pageviews
         ]
 
+        forecast = linear_forecast(
+            series=pageviews,
+            months_ahead=3,
+            lookback_months=12,
+        )
+
         results.append(
             {
                 "language": language,
                 "article": article,
                 "metrics": metrics,
                 "series": series,
+                "forecast": forecast,
                 "status": "ok",
             }
         )
@@ -78,6 +87,7 @@ def parse_article_overrides(
         pl=Głodówka lecznicza
         cs=Přerušovaný půst
     """
+
     if not values:
         return {}
 
