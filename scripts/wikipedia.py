@@ -1,9 +1,24 @@
+import re
+
 import httpx
 
 from cache_utils import load_cache, save_cache
 
 
 USER_AGENT = "WikipediaInterestSkill/0.1 (contact: dz546838@gmail.com)"
+
+
+def _headers() -> dict:
+    return {
+        "User-Agent": USER_AGENT,
+    }
+
+
+def _clean_snippet(snippet: str) -> str:
+    """
+    Remove simple HTML tags returned by MediaWiki search snippets.
+    """
+    return re.sub(r"<[^>]+>", "", snippet)
 
 
 def search_english_article(topic: str) -> dict:
@@ -24,14 +39,10 @@ def search_english_article(topic: str) -> dict:
         "srlimit": 5,
     }
 
-    headers = {
-        "User-Agent": USER_AGENT,
-    }
-
     response = httpx.get(
         url,
         params=params,
-        headers=headers,
+        headers=_headers(),
         timeout=20.0,
     )
     response.raise_for_status()
@@ -44,13 +55,18 @@ def search_english_article(topic: str) -> dict:
             f"No English Wikipedia article found for topic '{topic}'"
         )
 
-    best_match = {
+    result = {
         "pageid": results[0]["pageid"],
         "title": results[0]["title"],
     }
 
-    save_cache("article_search", cache_key, best_match)
-    return best_match
+    save_cache(
+        "article_search",
+        cache_key,
+        result,
+    )
+
+    return result
 
 
 def get_interlanguage_title(
@@ -60,7 +76,11 @@ def get_interlanguage_title(
     cache_key = (
         f"get_interlanguage_title::{english_title}::{target_language}"
     )
-    cached = load_cache("langlinks", cache_key)
+
+    cached = load_cache(
+        "langlinks",
+        cache_key,
+    )
 
     if cached is not None:
         return cached["title"]
@@ -76,14 +96,10 @@ def get_interlanguage_title(
         "format": "json",
     }
 
-    headers = {
-        "User-Agent": USER_AGENT,
-    }
-
     response = httpx.get(
         url,
         params=params,
-        headers=headers,
+        headers=_headers(),
         timeout=20.0,
     )
     response.raise_for_status()
@@ -113,9 +129,108 @@ def get_interlanguage_title(
     return title
 
 
-def resolve_article(topic: str, language: str) -> dict:
+def search_local_candidates(
+    topic: str,
+    language: str,
+    limit: int = 5,
+) -> list[dict]:
+    """
+    Return local Wikipedia search candidates.
+
+    Candidates are returned for review instead of automatically
+    selecting the first search result.
+    """
+    cache_key = (
+        f"local_candidates::{topic}::{language}::{limit}"
+    )
+
+    cached = load_cache(
+        "local_candidates",
+        cache_key,
+    )
+
+    if cached is not None:
+        return cached
+
+    url = f"https://{language}.wikipedia.org/w/api.php"
+
+    params = {
+        "action": "query",
+        "list": "search",
+        "srsearch": topic,
+        "format": "json",
+        "utf8": 1,
+        "srlimit": limit,
+    }
+
+    response = httpx.get(
+        url,
+        params=params,
+        headers=_headers(),
+        timeout=20.0,
+    )
+    response.raise_for_status()
+
+    data = response.json()
+    results = data["query"]["search"]
+
+    candidates = []
+
+    for item in results:
+        candidates.append(
+            {
+                "pageid": item["pageid"],
+                "title": item["title"],
+                "snippet": _clean_snippet(
+                    item.get("snippet", "")
+                ),
+            }
+        )
+
+    save_cache(
+        "local_candidates",
+        cache_key,
+        candidates,
+    )
+
+    return candidates
+
+
+def resolve_article(
+    topic: str,
+    language: str,
+    article_override: str | None = None,
+) -> dict:
+    """
+    Resolve a topic to an article.
+
+    Resolution order:
+    1. Explicit article override.
+    2. English canonical article.
+    3. Interlanguage link.
+    4. Local candidates requiring review.
+    """
+
+    if article_override:
+        return {
+            "topic": topic,
+            "source_language": None,
+            "source_title": None,
+            "language": language,
+            "title": article_override,
+            "url": (
+                f"https://{language}.wikipedia.org/wiki/"
+                f"{article_override.replace(' ', '_')}"
+            ),
+            "resolution_method": "explicit_override",
+            "status": "resolved",
+        }
+
     cache_key = f"resolve_article::{topic}::{language}"
-    cached = load_cache("resolved_articles", cache_key)
+    cached = load_cache(
+        "resolved_articles",
+        cache_key,
+    )
 
     if cached is not None:
         return cached
@@ -136,7 +251,13 @@ def resolve_article(topic: str, language: str) -> dict:
             "resolution_method": "english_search",
             "status": "resolved",
         }
-        save_cache("resolved_articles", cache_key, result)
+
+        save_cache(
+            "resolved_articles",
+            cache_key,
+            result,
+        )
+
         return result
 
     target_title = get_interlanguage_title(
@@ -144,27 +265,32 @@ def resolve_article(topic: str, language: str) -> dict:
         target_language=language,
     )
 
-    if target_title is None:
+    if target_title is not None:
         result = {
             "topic": topic,
             "source_language": "en",
             "source_title": english_article["title"],
             "language": language,
-            "title": None,
-            "url": None,
-            "resolution_method": "interlanguage_link",
-            "status": "unresolved",
-            "reason": (
-                f"No interlanguage article found for "
-                f"'{english_article['title']}' in '{language}' Wikipedia."
+            "title": target_title,
+            "url": (
+                f"https://{language}.wikipedia.org/wiki/"
+                f"{target_title.replace(' ', '_')}"
             ),
+            "resolution_method": "interlanguage_link",
+            "status": "resolved",
         }
-        save_cache("resolved_articles", cache_key, result)
+
+        save_cache(
+            "resolved_articles",
+            cache_key,
+            result,
+        )
+
         return result
 
-    article_url = (
-        f"https://{language}.wikipedia.org/wiki/"
-        f"{target_title.replace(' ', '_')}"
+    candidates = search_local_candidates(
+        topic=topic,
+        language=language,
     )
 
     result = {
@@ -172,13 +298,23 @@ def resolve_article(topic: str, language: str) -> dict:
         "source_language": "en",
         "source_title": english_article["title"],
         "language": language,
-        "title": target_title,
-        "url": article_url,
-        "resolution_method": "interlanguage_link",
-        "status": "resolved",
+        "title": None,
+        "url": None,
+        "resolution_method": "local_candidates",
+        "status": "needs_review",
+        "reason": (
+            f"No interlanguage article found for "
+            f"'{english_article['title']}' in '{language}' Wikipedia."
+        ),
+        "candidates": candidates,
     }
 
-    save_cache("resolved_articles", cache_key, result)
+    save_cache(
+        "resolved_articles",
+        cache_key,
+        result,
+    )
+
     return result
 
 
@@ -193,7 +329,11 @@ def fetch_pageviews(
         f"fetch_pageviews::{article_title}::{language}::"
         f"{start}::{end}::{granularity}"
     )
-    cached = load_cache("pageviews", cache_key)
+
+    cached = load_cache(
+        "pageviews",
+        cache_key,
+    )
 
     if cached is not None:
         return cached
@@ -206,13 +346,9 @@ def fetch_pageviews(
         f"{encoded_title}/{granularity}/{start}/{end}"
     )
 
-    headers = {
-        "User-Agent": USER_AGENT,
-    }
-
     response = httpx.get(
         url,
-        headers=headers,
+        headers=_headers(),
         timeout=30.0,
     )
     response.raise_for_status()
@@ -220,5 +356,10 @@ def fetch_pageviews(
     data = response.json()
     items = data.get("items", [])
 
-    save_cache("pageviews", cache_key, items)
+    save_cache(
+        "pageviews",
+        cache_key,
+        items,
+    )
+
     return items

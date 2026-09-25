@@ -11,13 +11,16 @@ def analyze_topic(
     languages: list[str],
     start: str,
     end: str,
+    article_overrides: dict[str, str] | None = None,
 ) -> dict:
     results = []
+    article_overrides = article_overrides or {}
 
     for language in languages:
         article = resolve_article(
             topic=topic,
             language=language,
+            article_override=article_overrides.get(language),
         )
 
         if article["status"] != "resolved":
@@ -27,7 +30,7 @@ def analyze_topic(
                     "article": article,
                     "metrics": None,
                     "series": [],
-                    "status": "unresolved",
+                    "status": article["status"],
                 }
             )
             continue
@@ -67,6 +70,40 @@ def analyze_topic(
     }
 
 
+def parse_article_overrides(
+    values: list[str] | None,
+) -> dict[str, str]:
+    """
+    Parse values like:
+        pl=Głodówka lecznicza
+        cs=Přerušovaný půst
+    """
+    if not values:
+        return {}
+
+    overrides = {}
+
+    for value in values:
+        if "=" not in value:
+            raise ValueError(
+                "Article override must use LANGUAGE=TITLE format."
+            )
+
+        language, title = value.split("=", 1)
+
+        language = language.strip()
+        title = title.strip()
+
+        if not language or not title:
+            raise ValueError(
+                "Article override must use LANGUAGE=TITLE format."
+            )
+
+        overrides[language] = title
+
+    return overrides
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Analyze Wikipedia interest for a topic."
@@ -98,6 +135,15 @@ def main():
     )
 
     parser.add_argument(
+        "--article-override",
+        action="append",
+        help=(
+            "Explicit article mapping in LANGUAGE=TITLE format. "
+            "Can be provided multiple times."
+        ),
+    )
+
+    parser.add_argument(
         "--chart",
         help="Optional path for PNG chart output.",
     )
@@ -106,18 +152,21 @@ def main():
         "--chart-mode",
         choices=["absolute", "normalized"],
         default="absolute",
-        help=(
-            "Chart mode: raw pageviews or normalized trend."
-        ),
+        help="Chart mode: raw pageviews or normalized trend.",
     )
 
     args = parser.parse_args()
+
+    article_overrides = parse_article_overrides(
+        args.article_override
+    )
 
     result = analyze_topic(
         topic=args.topic,
         languages=args.languages,
         start=args.start,
         end=args.end,
+        article_overrides=article_overrides,
     )
 
     if args.chart:
